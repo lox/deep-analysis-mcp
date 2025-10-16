@@ -1,0 +1,52 @@
+# golangci-lint v2 configuration
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - revive          # Better replacement for golint
+    - gocritic        # Additional style/performance checks
+    - unconvert       # Unnecessary type conversions
+    - copyloopvar     # Go 1.22+ loop variable issues
+    - usestdlibvars   # Use standard library constants
+    - zerologlint     # Detect incorrect zerolog usage
+    - forbidigo       # Forbid certain function calls
+
+  disable:
+    - errcheck        # Too noisy for this project
+    - misspell        # Disabled spelling checks
+
+  settings:
+    revive:
+      # Enable all rules except those explicitly disabled
+      rules:
+        - name: var-naming
+          disabled: true # Too strict for short variable names
+        - name: exported
+          disabled: true # Let's start without requiring docs for all exports
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck # Don't require error checking in tests
+
+issues:
+  # Don't hide multiple issues in the same line
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+      rewrite-rules:
+        - pattern: interface{}
+          replacement: any
+        - pattern: a[b:len(a)]
+          replacement: a[b:]
+    goimports:
+      local-prefixes:
+        - "github.com/lachlan/gpt-5-pro-mcp"

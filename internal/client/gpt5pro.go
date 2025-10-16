@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"sync"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -13,13 +12,6 @@ import (
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/responses"
 )
-
-func init() {
-	// Configure logging to stderr
-	log.SetOutput(os.Stderr)
-	log.SetPrefix("[gpt-5-pro-mcp] ")
-	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
-}
 
 const (
 	defaultModel  = "gpt-5-pro"
@@ -34,20 +26,25 @@ type FileOps interface {
 
 // GPT5ProClient handles communication with OpenAI's Responses API
 type GPT5ProClient struct {
-	client     *openai.Client
-	fileOps    FileOps
-	responseID string
-	mu         sync.RWMutex
+	client  *openai.Client
+	fileOps FileOps
+	conv    map[string]string // conversation_id -> response_id
+	mu      sync.RWMutex
+	tools   []responses.ToolUnionParam
 }
 
 // New creates a new GPT5ProClient instance
 func New(apiKey string, fileOps FileOps) *GPT5ProClient {
 	client := openai.NewClient(option.WithAPIKey(apiKey))
 
-	return &GPT5ProClient{
+	c := &GPT5ProClient{
 		client:  &client,
 		fileOps: fileOps,
+		conv:    make(map[string]string),
 	}
+	c.tools = c.buildTools()
+
+	return c
 }
 
 // Handle processes a consultation request using Responses API
@@ -59,24 +56,25 @@ func (c *GPT5ProClient) Handle(ctx context.Context, request mcp.CallToolRequest)
 	}
 
 	continueConversation := request.GetBool("continue", true)
-	log.Printf("Received request: prompt_len=%d continue=%v", len(prompt), continueConversation)
+	conversationID := request.GetString("conversation_id", "")
+	log.Printf("Received request: prompt_len=%d continue=%v conversation_id=%q", len(prompt), continueConversation, conversationID)
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Start fresh if continue is false
-	if !continueConversation {
+	// Get previous response ID if continuing
+	var prevResponseID string
+	if continueConversation && conversationID != "" {
+		prevResponseID = c.getRespID(conversationID)
+		if prevResponseID != "" {
+			log.Printf("Continuing conversation: id=%s response_id=%s", conversationID, prevResponseID)
+		}
+	} else {
 		log.Printf("Starting fresh conversation")
-		c.responseID = ""
-	} else if c.responseID != "" {
-		log.Printf("Continuing conversation: response_id=%s", c.responseID)
 	}
 
 	// Build the request parameters
 	params := responses.ResponseNewParams{
 		Model:        defaultModel,
 		Instructions: openai.Opt(buildSystemPrompt()),
-		Tools:        c.buildTools(),
+		Tools:        c.tools,
 	}
 
 	// Add input message
@@ -88,8 +86,8 @@ func (c *GPT5ProClient) Handle(ctx context.Context, request mcp.CallToolRequest)
 	}
 
 	// Add previous response ID if continuing
-	if continueConversation && c.responseID != "" {
-		params.PreviousResponseID = openai.Opt(c.responseID)
+	if prevResponseID != "" {
+		params.PreviousResponseID = openai.Opt(prevResponseID)
 	}
 
 	// Call OpenAI Responses API
@@ -101,7 +99,9 @@ func (c *GPT5ProClient) Handle(ctx context.Context, request mcp.CallToolRequest)
 	}
 
 	// Save the response ID for conversation continuity
-	c.responseID = response.ID
+	if conversationID != "" {
+		c.setRespID(conversationID, response.ID)
+	}
 	log.Printf("Received response: id=%s status=%s", response.ID, response.Status)
 
 	// Handle tool calls in a loop
@@ -144,7 +144,7 @@ func (c *GPT5ProClient) Handle(ctx context.Context, request mcp.CallToolRequest)
 			Input: responses.ResponseNewParamsInputUnion{
 				OfInputItemList: toolOutputs,
 			},
-			Tools: c.buildTools(),
+			Tools: c.tools,
 		}
 
 		response, err = c.client.Responses.New(ctx, params)
@@ -154,12 +154,28 @@ func (c *GPT5ProClient) Handle(ctx context.Context, request mcp.CallToolRequest)
 		}
 
 		// Update response ID
-		c.responseID = response.ID
+		if conversationID != "" {
+			c.setRespID(conversationID, response.ID)
+		}
 		log.Printf("Updated response: id=%s status=%s", response.ID, response.Status)
 	}
 
 	log.Printf("ERROR: Max iterations (%d) reached", maxIterations)
 	return mcp.NewToolResultError("Max function call iterations reached"), nil
+}
+
+// getRespID safely retrieves a response ID for a conversation
+func (c *GPT5ProClient) getRespID(conversationID string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.conv[conversationID]
+}
+
+// setRespID safely stores a response ID for a conversation
+func (c *GPT5ProClient) setRespID(conversationID, responseID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.conv[conversationID] = responseID
 }
 
 // buildTools defines the tools available to the model
@@ -173,11 +189,13 @@ func (c *GPT5ProClient) buildTools() []responses.ToolUnionParam {
 					"path": map[string]any{
 						"type":        "string",
 						"description": "Path to the file to read (supports ~ for home directory)",
+						"minLength":   1,
 					},
 				},
-				"required": []string{"path"},
+				"required":             []string{"path"},
+				"additionalProperties": false,
 			},
-			false, // strict
+			true, // strict
 		),
 		responses.ToolParamOfFunction(
 			"grep_files",
@@ -187,19 +205,23 @@ func (c *GPT5ProClient) buildTools() []responses.ToolUnionParam {
 					"pattern": map[string]any{
 						"type":        "string",
 						"description": "Regular expression pattern to search for",
+						"minLength":   1,
 					},
 					"path": map[string]any{
 						"type":        "string",
-						"description": "File path or glob pattern (e.g., '*.go', 'src/**/*.js')",
+						"description": "File path or glob pattern (e.g., '*.go', 'src/*.js') using shell-style wildcards (* and ?)",
+						"minLength":   1,
 					},
 					"ignore_case": map[string]any{
 						"type":        "boolean",
-						"description": "Perform case-insensitive search (default: false)",
+						"description": "Perform case-insensitive search",
+						"default":     false,
 					},
 				},
-				"required": []string{"pattern", "path"},
+				"required":             []string{"pattern", "path"},
+				"additionalProperties": false,
 			},
-			false, // strict
+			true, // strict
 		),
 	}
 }

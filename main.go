@@ -11,6 +11,11 @@ import (
 )
 
 func main() {
+	// Configure logging to stderr
+	log.SetOutput(os.Stderr)
+	log.SetPrefix("[gpt-5-pro-mcp] ")
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		log.Fatal("OPENAI_API_KEY environment variable is required")
