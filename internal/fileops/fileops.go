@@ -168,3 +168,57 @@ func (h *Handler) GrepFiles(ctx context.Context, pattern, pathPattern string, ig
 
 	return strings.Join(results, "\n"), nil
 }
+
+// GlobFiles returns a list of files matching the glob pattern
+func (h *Handler) GlobFiles(ctx context.Context, pattern string) (string, error) {
+	// Check context before starting
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	// Expand ~ to home directory (only ~/path, not ~user/path)
+	if strings.HasPrefix(pattern, "~") {
+		if len(pattern) > 1 && pattern[1] != '/' && pattern[1] != filepath.Separator {
+			return "", fmt.Errorf("unsupported path format: only ~/ is supported, not ~username")
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to get home directory: %w", err)
+		}
+		pattern = filepath.Join(home, pattern[1:])
+	}
+
+	// Find matching files
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", fmt.Errorf("invalid glob pattern: %w", err)
+	}
+
+	if len(matches) == 0 {
+		return "No files matched the pattern", nil
+	}
+
+	var results []string
+	for _, path := range matches {
+		// Check context periodically
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+		}
+
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+
+		// Mark directories with trailing /
+		if info.IsDir() {
+			results = append(results, path+"/")
+		} else {
+			results = append(results, path)
+		}
+	}
+
+	return strings.Join(results, "\n"), nil
+}

@@ -1,18 +1,19 @@
-# GPT-5-Pro MCP
+# Deep Analysis MCP
 
-An MCP (Model Context Protocol) server that provides access to OpenAI's GPT-5-Pro for solving complex problems. GPT-5-Pro can read files and search codebases to gather context for analysis.
+An MCP (Model Context Protocol) server that provides access to systematic deep analysis for complex problems. The AI agent can read files, search codebases, and discover files to gather context for comprehensive analysis.
 
 ## Features
 
-- **GPT-5-Pro Access**: Uses OpenAI's GPT-5-Pro model via the Responses API
-- **File Operations**: GPT-5-Pro can read files and search with grep to gather information
-- **Automatic Conversation Continuity**: Server-side conversation state via response IDs
+- **Deep Analysis**: Systematic, multi-step reasoning for complex problems
+- **File Operations**: Read files, search with grep, discover files with glob patterns
+- **Automatic Conversation Continuity**: Server-side conversation state management
+- **Multiple Transports**: stdio, SSE, or HTTP streaming
 - **Comprehensive Logging**: Stderr logging for debugging and monitoring
 
 ## Prerequisites
 
 - Go 1.25.1 or later
-- [OpenAI API Key](https://platform.openai.com/) with access to GPT-5-Pro
+- [OpenAI API Key](https://platform.openai.com/) with access to GPT-5-Pro (used as the underlying model)
 - [Hermit](https://cashapp.github.io/hermit/) (optional, for environment management)
 
 ## Installation
@@ -37,7 +38,7 @@ task build
 go mod download
 
 # Build
-go build -o dist/gpt-5-pro-mcp .
+go build -o dist/deep-analysis-mcp .
 ```
 
 ## Configuration
@@ -56,70 +57,101 @@ export OPENAI_API_KEY="your-api-key-here"
 
 ## Usage
 
-### Install to Claude Code
+### Quick Start with HTTP
 
 ```bash
-task install:claude-code
-```
+# Start the server
+task start:tmux
 
-This installs the MCP server to your user-level Claude Code configuration with the `OPENAI_API_KEY` from your environment.
+# Install to your MCP client
+task install:amp          # For Amp
+task install:codex        # For Codex
+task install:claude-code  # For Claude Code
+
+# Stop the server
+task stop
+```
 
 ### Manual Installation
 
-Add to your MCP client configuration (e.g., `~/.claude.json`):
+Add to your MCP client configuration (e.g., Amp settings):
 
 ```json
 {
   "mcpServers": {
-    "gpt-5-pro": {
-      "command": "/path/to/gpt-5-pro-mcp/dist/gpt-5-pro-mcp",
-      "env": {
-        "OPENAI_API_KEY": "your-api-key-here"
-      }
+    "deep-analysis": {
+      "url": "http://localhost:8080/mcp"
     }
   }
 }
 ```
 
-### Testing
+### Transport Options
 
-Test the server directly using mcp-tester:
+Run with different transports:
 
 ```bash
-mcp-tester call --tool=gpt-5-pro --json='{"prompt":"What is 2+2?"}' dist/gpt-5-pro-mcp
+# stdio (default)
+./dist/deep-analysis-mcp
+
+# HTTP streaming
+./dist/deep-analysis-mcp -transport http -addr :8080
+
+# SSE
+./dist/deep-analysis-mcp -transport sse -addr :8080
 ```
 
-## The `gpt-5-pro` Tool
+## The `deep-analysis` Tool
 
 ### Parameters
 
-- **prompt** (required): The question or problem to analyze
+- **task** (required): The specific question or analysis you want performed
+- **context** (optional): Background information, current situation, what you've tried
+- **files** (optional): Array of file paths to automatically read and attach
 - **continue** (optional, default: `true`): Continue previous conversation or start fresh
+- **conversation_id** (optional): Identifier to continue a specific conversation
 
-### Available Tools for GPT-5-Pro
+### Available Tools for the AI
 
-GPT-5-Pro has access to these tools to gather information:
+The deep analysis AI has access to these tools to gather information:
 
-- **read_file**: Read contents of any file from the filesystem
-- **grep_files**: Search for regex patterns in files matching glob patterns
+- **glob_files(pattern)**: Discover files matching glob patterns (e.g., `**/*.go`, `internal/**/test_*.go`)
+- **read_file(path)**: Read contents of any file from the filesystem
+- **grep_files(pattern, path, ignore_case)**: Search for regex patterns in files
 
-GPT-5-Pro will automatically use these tools when it needs to examine code or gather context.
+The AI will automatically use these tools when it needs to examine code or gather context.
 
 ### Conversation Flow
 
-Conversation state is managed server-side using OpenAI's Responses API:
+Conversation state is managed server-side:
 
-- **continue: true** (default) - Continues from the previous response ID
+- **continue: true** (default) - Continues from the previous response
 - **continue: false** - Starts a fresh conversation
-
-Conversation history persists for the lifetime of the MCP server process.
+- Conversation history persists for the lifetime of the MCP server process
 
 ### Examples
 
 **Single Query:**
 ```json
 {
-  "prompt": "Explain the performance implications of using channels vs mutexes in Go"
+  "task": "Explain the performance implications of using channels vs mutexes in Go"
+}
+```
+
+**With Context:**
+```json
+{
+  "task": "Review this authentication implementation for security issues",
+  "context": "We're using JWT tokens but getting intermittent auth failures. The tokens are validated in middleware but some requests still fail."
+}
+```
+
+**With Attached Files:**
+```json
+{
+  "task": "Review the conversation continuity implementation and suggest improvements",
+  "context": "Added default conversation ID but want to ensure thread-safety is robust",
+  "files": ["internal/client/deepanalysis.go", "internal/server/mcp.go"]
 }
 ```
 
@@ -128,56 +160,37 @@ Conversation history persists for the lifetime of the MCP server process.
 Query 1:
 ```json
 {
-  "prompt": "I'm investigating a memory leak in a Go application. The heap grows continuously."
+  "task": "I'm investigating a memory leak in a Go application. The heap grows continuously."
 }
 ```
 
-Query 2:
+Query 2 (automatically continues):
 ```json
 {
-  "prompt": "pprof shows 10,000+ goroutines blocked on channel receive.",
-  "continue": true
-}
-```
-
-Query 3 (continue defaults to true):
-```json
-{
-  "prompt": "The work channel is never closed. How should I fix this?"
+  "task": "pprof shows 10,000+ goroutines blocked on channel receive. What should I check?"
 }
 ```
 
 **Starting Fresh:**
 ```json
 {
-  "prompt": "New question about database indexing strategies",
+  "task": "New question about database indexing strategies",
   "continue": false
 }
 ```
-
-**With File Access:**
-
-GPT-5-Pro will automatically read files when needed:
-
-```json
-{
-  "prompt": "Review the error handling in internal/client/gpt5pro.go and suggest improvements"
-}
-```
-
-GPT-5-Pro will use `read_file` to examine the code and provide specific recommendations.
 
 ## How It Works
 
 This MCP uses OpenAI's Responses API with GPT-5-Pro. The system prompt guides the model to:
 
-- Break down complex problems systematically
-- Question assumptions and consider multiple perspectives
-- Use file operations to gather evidence when analyzing code
-- Provide clear, actionable insights
-- Acknowledge uncertainty when appropriate
+1. **Discover**: Use glob_files to find relevant files
+2. **Review**: Read pre-attached files and discovered files
+3. **Investigate**: Read additional files and search for patterns
+4. **Search**: Use grep_files to find code patterns across the codebase
+5. **Verify**: Gather evidence before drawing conclusions
+6. **Analyze**: Provide systematic, evidence-based recommendations
 
-GPT-5-Pro can proactively read files and search codebases using its built-in tools without requiring explicit user requests.
+The AI proactively uses file operations to gather evidence when analyzing code, without requiring explicit user requests.
 
 ## Development
 
@@ -196,6 +209,12 @@ task clean
 
 # Tidy dependencies
 task tidy
+
+# Start server in tmux
+task start:tmux
+
+# Stop server
+task stop
 ```
 
 ## Architecture
@@ -205,17 +224,17 @@ task tidy
 ├── main.go                      # MCP server initialization
 ├── internal/
 │   ├── client/
-│   │   └── gpt5pro.go          # OpenAI Responses API client
+│   │   └── deepanalysis.go     # OpenAI Responses API client
 │   ├── server/
 │   │   └── mcp.go              # MCP server setup and tool registration
 │   └── fileops/
-│       └── fileops.go          # File operation handlers (read, grep)
+│       └── fileops.go          # File operation handlers (read, grep, glob)
 └── Taskfile.yaml               # Build and development tasks
 ```
 
 ## Model Information
 
-- **Model**: `gpt-5-pro`
+- **Underlying Model**: `gpt-5-pro`
 - **Provider**: OpenAI
 - **API**: OpenAI Responses API
 - **Capabilities**: Advanced reasoning, function calling, extended context
@@ -224,12 +243,12 @@ task tidy
 
 The server logs to stderr with timestamps. Logs include:
 
-- Request details (prompt length, continue flag)
+- Request details (task length, context length, files count)
 - API calls and responses
-- Tool executions (file reads, grep operations)
+- Tool executions (file reads, grep operations, glob searches)
 - Response processing details
 
-View logs when testing with mcp-tester or check Claude Code logs at `~/Library/Logs/Claude/`.
+View logs when testing or check logs at `~/Library/Logs/` for your MCP client.
 
 ## Pricing
 

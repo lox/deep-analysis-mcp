@@ -5,16 +5,16 @@ import (
 	"log"
 	"os"
 
-	"github.com/lox/gpt-5-pro-mcp/internal/client"
-	"github.com/lox/gpt-5-pro-mcp/internal/fileops"
-	"github.com/lox/gpt-5-pro-mcp/internal/server"
+	"github.com/lox/deep-analysis-mcp/internal/client"
+	"github.com/lox/deep-analysis-mcp/internal/fileops"
+	"github.com/lox/deep-analysis-mcp/internal/server"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 func main() {
 	// Configure logging to stderr
 	log.SetOutput(os.Stderr)
-	log.SetPrefix("[gpt-5-pro-mcp] ")
+	log.SetPrefix("[deep-analysis-mcp] ")
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 
 	// CLI flags

@@ -22,10 +22,11 @@ const (
 type FileOps interface {
 	ReadFile(ctx context.Context, path string) (string, error)
 	GrepFiles(ctx context.Context, pattern, path string, ignoreCase bool) (string, error)
+	GlobFiles(ctx context.Context, pattern string) (string, error)
 }
 
-// GPT5ProClient handles communication with OpenAI's Responses API
-type GPT5ProClient struct {
+// DeepAnalysisClient handles communication with OpenAI's Responses API
+type DeepAnalysisClient struct {
 	client  *openai.Client
 	fileOps FileOps
 	conv    map[string]string // conversation_id -> response_id
@@ -33,11 +34,11 @@ type GPT5ProClient struct {
 	tools   []responses.ToolUnionParam
 }
 
-// New creates a new GPT5ProClient instance
-func New(apiKey string, fileOps FileOps) *GPT5ProClient {
+// New creates a new DeepAnalysisClient instance
+func New(apiKey string, fileOps FileOps) *DeepAnalysisClient {
 	client := openai.NewClient(option.WithAPIKey(apiKey))
 
-	c := &GPT5ProClient{
+	c := &DeepAnalysisClient{
 		client:  &client,
 		fileOps: fileOps,
 		conv:    make(map[string]string),
@@ -48,13 +49,15 @@ func New(apiKey string, fileOps FileOps) *GPT5ProClient {
 }
 
 // Handle processes a consultation request using Responses API
-func (c *GPT5ProClient) Handle(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	prompt, err := request.RequireString("prompt")
+func (c *DeepAnalysisClient) Handle(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	task, err := request.RequireString("task")
 	if err != nil {
-		log.Printf("ERROR: Failed to get prompt: %v", err)
+		log.Printf("ERROR: Failed to get task: %v", err)
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
+	context := request.GetString("context", "")
+	files := request.GetStringSlice("files", nil)
 	continueConversation := request.GetBool("continue", true)
 	conversationID := request.GetString("conversation_id", "")
 	
@@ -63,7 +66,37 @@ func (c *GPT5ProClient) Handle(ctx context.Context, request mcp.CallToolRequest)
 		conversationID = "default"
 	}
 	
-	log.Printf("Received request: prompt_len=%d continue=%v conversation_id=%q", len(prompt), continueConversation, conversationID)
+	// Read attached files if provided
+	var filesContent string
+	if len(files) > 0 {
+		log.Printf("Reading %d attached files", len(files))
+		var fileParts []string
+		for _, filePath := range files {
+			content, err := c.fileOps.ReadFile(ctx, filePath)
+			if err != nil {
+				log.Printf("WARNING: Failed to read file %s: %v", filePath, err)
+				fileParts = append(fileParts, fmt.Sprintf("File: %s\nError: %v\n", filePath, err))
+			} else {
+				log.Printf("Successfully read file: %s (%d bytes)", filePath, len(content))
+				fileParts = append(fileParts, fmt.Sprintf("File: %s\n```\n%s\n```\n", filePath, content))
+			}
+		}
+		filesContent = "\n" + fmt.Sprintf("Attached Files:\n%s\n", joinStrings(fileParts, "\n"))
+	}
+	
+	// Build the full prompt with context and files if provided
+	var prompt string
+	if context != "" && filesContent != "" {
+		prompt = fmt.Sprintf("Context:\n%s%s\nTask:\n%s", context, filesContent, task)
+	} else if context != "" {
+		prompt = fmt.Sprintf("Context:\n%s\n\nTask:\n%s", context, task)
+	} else if filesContent != "" {
+		prompt = fmt.Sprintf("%s\nTask:\n%s", filesContent, task)
+	} else {
+		prompt = task
+	}
+	
+	log.Printf("Received request: task_len=%d context_len=%d files=%d continue=%v conversation_id=%q", len(task), len(context), len(files), continueConversation, conversationID)
 
 	// Get previous response ID if continuing
 	var prevResponseID string
@@ -175,28 +208,28 @@ func (c *GPT5ProClient) Handle(ctx context.Context, request mcp.CallToolRequest)
 }
 
 // getRespID safely retrieves a response ID for a conversation
-func (c *GPT5ProClient) getRespID(conversationID string) string {
+func (c *DeepAnalysisClient) getRespID(conversationID string) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.conv[conversationID]
 }
 
 // setRespID safely stores a response ID for a conversation
-func (c *GPT5ProClient) setRespID(conversationID, responseID string) {
+func (c *DeepAnalysisClient) setRespID(conversationID, responseID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.conv[conversationID] = responseID
 }
 
 // clearRespID safely clears a conversation's response ID
-func (c *GPT5ProClient) clearRespID(conversationID string) {
+func (c *DeepAnalysisClient) clearRespID(conversationID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.conv, conversationID)
 }
 
 // buildTools defines the tools available to the model
-func (c *GPT5ProClient) buildTools() []responses.ToolUnionParam {
+func (c *DeepAnalysisClient) buildTools() []responses.ToolUnionParam {
 	return []responses.ToolUnionParam{
 		responses.ToolParamOfFunction(
 			"read_file",
@@ -240,11 +273,27 @@ func (c *GPT5ProClient) buildTools() []responses.ToolUnionParam {
 			},
 			true, // strict
 		),
+		responses.ToolParamOfFunction(
+			"glob_files",
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"pattern": map[string]any{
+						"type":        "string",
+						"description": "Glob pattern (e.g., '**/*.go', 'internal/**/test_*.go', '*.{js,ts}'). Use ** for recursive matching, * for files/dirs, ? for single char.",
+						"minLength":   1,
+					},
+				},
+				"required":             []string{"pattern"},
+				"additionalProperties": false,
+			},
+			true, // strict
+		),
 	}
 }
 
 // executeFunction executes a function call requested by the model
-func (c *GPT5ProClient) executeFunction(ctx context.Context, name, argsJSON string) (string, error) {
+func (c *DeepAnalysisClient) executeFunction(ctx context.Context, name, argsJSON string) (string, error) {
 	switch name {
 	case "read_file":
 		var args struct {
@@ -265,6 +314,15 @@ func (c *GPT5ProClient) executeFunction(ctx context.Context, name, argsJSON stri
 			return "", fmt.Errorf("invalid arguments: %w", err)
 		}
 		return c.fileOps.GrepFiles(ctx, args.Pattern, args.Path, args.IgnoreCase)
+
+	case "glob_files":
+		var args struct {
+			Pattern string `json:"pattern"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return "", fmt.Errorf("invalid arguments: %w", err)
+		}
+		return c.fileOps.GlobFiles(ctx, args.Pattern)
 
 	default:
 		return "", fmt.Errorf("unknown function: %s", name)
@@ -329,41 +387,82 @@ func extractTextContent(response *responses.Response) string {
 	return result
 }
 
+// joinStrings joins strings with a separator
+func joinStrings(parts []string, sep string) string {
+	result := ""
+	for i, part := range parts {
+		if i > 0 {
+			result += sep
+		}
+		result += part
+	}
+	return result
+}
+
 // buildSystemPrompt creates the system prompt
 func buildSystemPrompt() string {
-	return `You are a GPT-5-Pro powered assistant - an expert problem-solving AI consulted for the most challenging and complex problems.
+	return `You are an expert deep analysis AI consulted for the most challenging and complex problems.
 
 Your role is to provide deep, systematic analysis through multi-step reasoning:
 
-1. **Problem Decomposition**: Break down complex problems into manageable components
-2. **Hypothesis Generation**: Form clear theories about root causes or solutions
-3. **Evidence Gathering**: Identify what information is needed and what conclusions can be drawn
+1. **Context Gathering**: FIRST, proactively use your tools to gather relevant information:
+   - Read files mentioned in the context or task
+   - Search for related code, configuration, or documentation
+   - Understand the full picture before forming conclusions
+   
+2. **Problem Decomposition**: Break down complex problems into manageable components
+
+3. **Hypothesis Generation**: Form clear theories about root causes or solutions based on evidence
+
 4. **Systematic Investigation**: Work through problems methodically, step by step
+
 5. **Confidence Assessment**: Honestly evaluate certainty levels at each stage
-6. **Iterative Refinement**: Build on previous findings to reach comprehensive understanding
+
+6. **Actionable Recommendations**: Provide concrete, specific next steps
 
 When analyzing problems:
+- **Start by gathering context** - Read relevant files, search for patterns, understand the codebase
 - Think deeply and systematically
-- Question assumptions
+- Question assumptions and verify them with evidence
 - Consider multiple perspectives
-- Identify gaps in understanding
+- Identify gaps in understanding and fill them proactively
 - Provide clear, actionable insights
 - Acknowledge uncertainty when appropriate
-- Suggest concrete next steps
+- Suggest concrete next steps with examples
 
 Your responses should be:
+- **Evidence-based**: Always gather information with your tools before concluding
 - **Thorough**: Cover all relevant aspects
 - **Clear**: Easy to understand and act upon
 - **Structured**: Organized logically
-- **Evidence-based**: Grounded in facts and reasoning
-- **Actionable**: Include concrete recommendations
+- **Actionable**: Include concrete recommendations with code examples when relevant
 
 **Available Tools**:
 You have access to the following tools to gather information:
-- read_file: Read the contents of any file from the filesystem
-- grep_files: Search for patterns in files using regex and glob patterns
 
-Use these tools proactively to gather evidence and verify your hypotheses. Don't hesitate to read files or search codebases when it helps your analysis.
+1. **glob_files(pattern)**: Discover files matching a pattern
+   - Examples: "**/*.go" (all Go files), "internal/**/test_*.go" (test files in internal), "*.{js,ts}" (JS/TS files)
+   - Use this FIRST when you don't know exact file paths
+   - Directories marked with trailing /
 
-You are being consulted because standard approaches have proven insufficient. Bring your full analytical capabilities to bear on each problem.`
+2. **read_file(path)**: Read the contents of any file
+   - Use after discovering files with glob_files
+   - Supports ~ for home directory
+
+3. **grep_files(pattern, path, ignore_case)**: Search for regex patterns in files
+   - pattern: Regular expression to search for
+   - path: Glob pattern for files to search (e.g., "*.go", "src/**/*.js")
+   - Use to find specific code patterns across multiple files
+
+**Attached Files**:
+Sometimes files will be pre-attached to your prompt under "Attached Files". Review these carefully as they contain the key code/config you need to analyze.
+
+**CRITICAL WORKFLOW** - Use these tools PROACTIVELY and FREQUENTLY:
+1. **Discover**: Use glob_files to find relevant files if you don't know exact paths
+2. **Review**: Read any pre-attached files first
+3. **Investigate**: Read additional files mentioned or discovered
+4. **Search**: Use grep_files to find patterns or references across the codebase
+5. **Verify**: Don't make assumptions - gather evidence before concluding
+
+You are being consulted because standard approaches have proven insufficient. Bring your full analytical capabilities to bear, and let the evidence guide your recommendations.`
 }

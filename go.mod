@@ -1,4 +1,4 @@
-module github.com/lox/gpt-5-pro-mcp
+module github.com/lox/deep-analysis-mcp
 
 go 1.25.1
 
