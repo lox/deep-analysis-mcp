@@ -43,8 +43,8 @@ tasks:
         export OPENAI_API_KEY="${OPENAI_API_KEY}"
         ./dist/gpt-5-pro-mcp
 
-  install:claude-code:
-    desc: Install MCP server to Claude Code (user scope)
+  start:
+    desc: Start HTTP server on port 8080
     deps: [build]
     cmds:
       - |
@@ -52,17 +52,75 @@ tasks:
           echo "Error: OPENAI_API_KEY environment variable is required"
           exit 1
         fi
-        claude mcp add --scope user --transport stdio gpt-5-pro --env OPENAI_API_KEY="${OPENAI_API_KEY}" -- "{{.ROOT_DIR}}/dist/gpt-5-pro-mcp"
-        echo "Successfully installed gpt-5-pro MCP server to Claude Code (user scope)"
+        ./dist/gpt-5-pro-mcp -transport http -addr :8080
+
+  start:tmux:
+    desc: Start HTTP server in tmux session
+    deps: [build]
+    cmds:
+      - |
+        if [ -z "${OPENAI_API_KEY}" ]; then
+          echo "Error: OPENAI_API_KEY environment variable is required"
+          exit 1
+        fi
+        if tmux has-session -t gpt-5-pro-mcp 2>/dev/null; then
+          echo "Session 'gpt-5-pro-mcp' already exists. Attach with: tmux attach -t gpt-5-pro-mcp"
+          exit 1
+        fi
+        tmux new-session -d -s gpt-5-pro-mcp "cd {{.ROOT_DIR}} && OPENAI_API_KEY=${OPENAI_API_KEY} ./dist/gpt-5-pro-mcp -transport http -addr :8080"
+        echo "Started gpt-5-pro-mcp server in tmux session"
+        echo "Attach with: tmux attach -t gpt-5-pro-mcp"
+        echo "Stop with: task stop"
+
+  stop:
+    desc: Stop tmux server session
+    cmds:
+      - |
+        if tmux has-session -t gpt-5-pro-mcp 2>/dev/null; then
+          tmux kill-session -t gpt-5-pro-mcp
+          echo "Stopped gpt-5-pro-mcp server"
+        else
+          echo "No tmux session 'gpt-5-pro-mcp' found"
+        fi
+
+  install:amp:
+    desc: Install MCP server to Amp via HTTP
+    cmds:
+      - amp mcp remove gpt-5-pro 2>/dev/null || true
+      - amp mcp add gpt-5-pro http://localhost:8080/mcp
+      - echo "Successfully installed gpt-5-pro MCP server to Amp"
+      - echo "Start the server with task start"
+
+  uninstall:amp:
+    desc: Uninstall MCP server from Amp
+    cmds:
+      - amp mcp remove gpt-5-pro
+      - echo "Successfully uninstalled gpt-5-pro MCP server from Amp"
+
+  install:claude-code:
+    desc: Install MCP server to Claude Code (user scope) via HTTP
+    cmds:
+      - claude mcp remove --scope user gpt-5-pro 2>/dev/null || true
+      - claude mcp add --scope user --transport http gpt-5-pro http://localhost:8080/mcp
+      - echo "Successfully installed gpt-5-pro MCP server to Claude Code"
+      - echo "Start the server with task start"
+
+  uninstall:claude-code:
+    desc: Uninstall MCP server from Claude Code (user scope)
+    cmds:
+      - claude mcp remove --scope user gpt-5-pro
+      - echo "Successfully uninstalled gpt-5-pro MCP server from Claude Code"
 
   install:codex:
-    desc: Install MCP server to Codex
-    deps: [build]
+    desc: Install MCP server to Codex via HTTP
     cmds:
-      - |
-        if [ -z "${OPENAI_API_KEY}" ]; then
-          echo "Error: OPENAI_API_KEY environment variable is required"
-          exit 1
-        fi
-        codex mcp add --env OPENAI_API_KEY="${OPENAI_API_KEY}" gpt-5-pro "{{.ROOT_DIR}}/dist/gpt-5-pro-mcp"
-        echo "Successfully installed gpt-5-pro MCP server to Codex"
+      - codex mcp remove gpt-5-pro 2>/dev/null || true
+      - codex mcp add --url http://localhost:8080/mcp gpt-5-pro
+      - echo "Successfully installed gpt-5-pro MCP server to Codex"
+      - echo "Start the server with task start"
+
+  uninstall:codex:
+    desc: Uninstall MCP server from Codex
+    cmds:
+      - codex mcp remove gpt-5-pro
+      - echo "Successfully uninstalled gpt-5-pro MCP server from Codex"

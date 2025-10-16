@@ -57,17 +57,27 @@ func (c *GPT5ProClient) Handle(ctx context.Context, request mcp.CallToolRequest)
 
 	continueConversation := request.GetBool("continue", true)
 	conversationID := request.GetString("conversation_id", "")
+	
+	// Use default conversation ID if none provided
+	if conversationID == "" {
+		conversationID = "default"
+	}
+	
 	log.Printf("Received request: prompt_len=%d continue=%v conversation_id=%q", len(prompt), continueConversation, conversationID)
 
 	// Get previous response ID if continuing
 	var prevResponseID string
-	if continueConversation && conversationID != "" {
+	if continueConversation {
 		prevResponseID = c.getRespID(conversationID)
 		if prevResponseID != "" {
 			log.Printf("Continuing conversation: id=%s response_id=%s", conversationID, prevResponseID)
+		} else {
+			log.Printf("Starting fresh conversation: id=%s", conversationID)
 		}
 	} else {
-		log.Printf("Starting fresh conversation")
+		log.Printf("Starting fresh conversation (continue=false)")
+		// Clear existing conversation state
+		c.clearRespID(conversationID)
 	}
 
 	// Build the request parameters
@@ -176,6 +186,13 @@ func (c *GPT5ProClient) setRespID(conversationID, responseID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.conv[conversationID] = responseID
+}
+
+// clearRespID safely clears a conversation's response ID
+func (c *GPT5ProClient) clearRespID(conversationID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.conv, conversationID)
 }
 
 // buildTools defines the tools available to the model
