@@ -1,0 +1,56 @@
+---
+
+version: '3'
+
+tasks:
+  build:
+    desc: Build the gpt-5-pro-mcp binary
+    cmds:
+      - mkdir -p dist
+      - go build -o dist/gpt-5-pro-mcp .
+
+  run:
+    desc: Run the gpt-5-pro-mcp server
+    deps: [build]
+    cmds:
+      - ./dist/gpt-5-pro-mcp
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v ./...
+
+  lint:
+    desc: Run linter
+    cmds:
+      - golangci-lint run
+
+  tidy:
+    desc: Tidy go modules
+    cmds:
+      - go mod tidy
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf dist/ bin/
+
+  dev:
+    desc: Run in development mode with auto-reload
+    deps: [build]
+    cmds:
+      - |
+        export OPENAI_API_KEY="${OPENAI_API_KEY}"
+        ./dist/gpt-5-pro-mcp
+
+  install:claude-code:
+    desc: Install MCP server to Claude Code (user scope)
+    deps: [build]
+    cmds:
+      - |
+        if [ -z "${OPENAI_API_KEY}" ]; then
+          echo "Error: OPENAI_API_KEY environment variable is required"
+          exit 1
+        fi
+        claude mcp add --scope user --transport stdio gpt-5-pro --env OPENAI_API_KEY="${OPENAI_API_KEY}" -- "{{.ROOT_DIR}}/dist/gpt-5-pro-mcp"
+        echo "Successfully installed gpt-5-pro MCP server to Claude Code (user scope)"
