@@ -218,7 +218,7 @@ func (c *GPT5ProClient) buildTools() []responses.ToolUnionParam {
 						"default":     false,
 					},
 				},
-				"required":             []string{"pattern", "path"},
+				"required":             []string{"pattern", "path", "ignore_case"},
 				"additionalProperties": false,
 			},
 			true, // strict
