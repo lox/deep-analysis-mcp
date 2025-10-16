@@ -19,6 +19,7 @@ go.work.sum
 # Environment variables
 .env
 .env.local
+.envrc
 
 # IDE
 .vscode/
