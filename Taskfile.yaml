@@ -54,3 +54,15 @@ tasks:
         fi
         claude mcp add --scope user --transport stdio gpt-5-pro --env OPENAI_API_KEY="${OPENAI_API_KEY}" -- "{{.ROOT_DIR}}/dist/gpt-5-pro-mcp"
         echo "Successfully installed gpt-5-pro MCP server to Claude Code (user scope)"
+
+  install:codex:
+    desc: Install MCP server to Codex
+    deps: [build]
+    cmds:
+      - |
+        if [ -z "${OPENAI_API_KEY}" ]; then
+          echo "Error: OPENAI_API_KEY environment variable is required"
+          exit 1
+        fi
+        codex mcp add --env OPENAI_API_KEY="${OPENAI_API_KEY}" gpt-5-pro "{{.ROOT_DIR}}/dist/gpt-5-pro-mcp"
+        echo "Successfully installed gpt-5-pro MCP server to Codex"
